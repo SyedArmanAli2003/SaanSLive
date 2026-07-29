@@ -45,6 +45,14 @@ function formatDelta(delta: number | null): string {
   return `${delta > 0 ? "+" : "-"}${rounded}`;
 }
 
+/** "15h stale" / "2d stale" — used only when isCurrentAqiStale is true. */
+function formatStaleAge(iso: string | null): string {
+  if (!iso) return "stale";
+  const ageHours = (Date.now() - new Date(iso).getTime()) / 3_600_000;
+  if (ageHours < 48) return `${Math.round(ageHours)}h stale`;
+  return `${Math.round(ageHours / 24)}d stale`;
+}
+
 export default function CityComparisonView() {
   const [entries, setEntries] = useState<CityComparisonEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,6 +106,10 @@ export default function CityComparisonView() {
     });
     return withRank;
   }, [entries, sortKey, sortDirection]);
+
+  // Chart bars cannot carry a per-city text label, so retain the same
+  // freshness warning shown in the table when the user switches views.
+  const staleEntries = sortedEntries.filter((entry) => entry.isCurrentAqiStale);
 
   const chartData = useMemo(
     () =>
@@ -194,40 +206,49 @@ export default function CityComparisonView() {
       {header}
 
       {viewMode === "chart" ? (
-        <div style={{ width: "100%", height: 420 }}>
-          <ResponsiveContainer>
-            <BarChart data={chartData} margin={{ top: 10, right: 14, bottom: 40, left: 0 }}>
-              <CartesianGrid stroke="rgba(255,255,255,0.1)" vertical={false} />
-              <XAxis
-                dataKey="city"
-                tick={{ fill: "rgba(255,255,255,0.7)", fontSize: 11 }}
-                axisLine={{ stroke: "rgba(255,255,255,0.2)" }}
-                tickLine={{ stroke: "rgba(255,255,255,0.2)" }}
-                angle={-35}
-                textAnchor="end"
-                interval={0}
-                height={70}
-              />
-              <YAxis
-                tick={{ fill: "rgba(255,255,255,0.7)", fontSize: 12 }}
-                axisLine={{ stroke: "rgba(255,255,255,0.2)" }}
-                tickLine={{ stroke: "rgba(255,255,255,0.2)" }}
-                allowDecimals={false}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "rgba(0,0,0,0.85)",
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  borderRadius: 12,
-                }}
-                labelStyle={{ color: "white" }}
-                formatter={(value: unknown) => (value == null ? "Forecast pending" : `${value}`)}
-              />
-              <Legend wrapperStyle={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }} />
-              <Bar dataKey="Current AQI" fill="#e8702a" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="Forecast AQI (24h avg)" fill="#4dabf7" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+        <div>
+          <div style={{ width: "100%", height: 420 }}>
+            <ResponsiveContainer>
+              <BarChart data={chartData} margin={{ top: 10, right: 14, bottom: 40, left: 0 }}>
+                <CartesianGrid stroke="rgba(255,255,255,0.1)" vertical={false} />
+                <XAxis
+                  dataKey="city"
+                  tick={{ fill: "rgba(255,255,255,0.7)", fontSize: 11 }}
+                  axisLine={{ stroke: "rgba(255,255,255,0.2)" }}
+                  tickLine={{ stroke: "rgba(255,255,255,0.2)" }}
+                  angle={-35}
+                  textAnchor="end"
+                  interval={0}
+                  height={70}
+                />
+                <YAxis
+                  tick={{ fill: "rgba(255,255,255,0.7)", fontSize: 12 }}
+                  axisLine={{ stroke: "rgba(255,255,255,0.2)" }}
+                  tickLine={{ stroke: "rgba(255,255,255,0.2)" }}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "rgba(0,0,0,0.85)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: 12,
+                  }}
+                  labelStyle={{ color: "white" }}
+                  formatter={(value: unknown) => (value == null ? "Forecast pending" : `${value}`)}
+                />
+                <Legend wrapperStyle={{ fontSize: 12, color: "rgba(255,255,255,0.7)" }} />
+                <Bar dataKey="Current AQI" fill="#e8702a" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Forecast AQI (24h avg)" fill="#4dabf7" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          {staleEntries.length > 0 ? (
+            <p className="mt-2 text-amber-300 text-[11px]">
+              ⚠ Current AQI includes stale sensor data: {staleEntries.map((entry) => (
+                `${entry.city} (${formatStaleAge(entry.oldestReadingAt)})`
+              )).join(", ")}
+            </p>
+          ) : null}
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -268,6 +289,14 @@ export default function CityComparisonView() {
                       <span className="text-white/30 text-[10px] ml-1">
                         ({entry.stationsWithReading}/{entry.totalStations})
                       </span>
+                      {entry.isCurrentAqiStale ? (
+                        <div
+                          className="text-amber-400 text-[10px] italic mt-0.5"
+                          title={entry.oldestReadingAt ? `Oldest contributing reading: ${entry.oldestReadingAt}` : undefined}
+                        >
+                          ⚠ Includes {formatStaleAge(entry.oldestReadingAt)} data
+                        </div>
+                      ) : null}
                     </td>
                     <td className="py-2 pr-3 text-right">
                       {forecastPending ? (
@@ -308,7 +337,8 @@ export default function CityComparisonView() {
       <div className="mt-3 text-white/30 text-[10px]">
         Current AQI and forecast are averaged across all of a city&apos;s monitored stations that have
         data. &quot;Forecast pending&quot; means no station in that city has a trained model forecast yet —
-        never a placeholder number.
+        never a placeholder number. A stale warning means the average includes a sensor reading more
+        than 12 hours old; its age is based on the oldest contributing reading.
       </div>
     </div>
   );

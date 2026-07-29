@@ -1,4 +1,9 @@
-ingestion/.env
+# Local credentials and environment configuration. Templates stay versioned,
+# but real values must never be committed.
+.env*
+!.env.example
+!.env.template
+
 .agents/skills
 skills-lock.json
 **/__pycache__/

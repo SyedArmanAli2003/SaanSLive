@@ -30,8 +30,10 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Environment files are local credentials. Only the redacted template belongs
+# in Git so deployments receive values through their secret manager.
 .env*
+!.env.example
 
 # vercel
 .vercel

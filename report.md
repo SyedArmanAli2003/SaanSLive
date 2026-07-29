@@ -1020,7 +1020,7 @@ All 5 tables (`stations`, `readings`, `weather`, `forecasts`, `user_profiles`) a
 `ingestion/db.py` reads `SUPABASE_DB_URL` from `ingestion/.env` via `python-dotenv`. The current connection string uses the **postgres superadmin role**:
 
 ```
-postgresql://postgres.ckjiukvxqqvjmpxhpclb:***@aws-0-ap-south-1.pooler.supabase.com:6543/postgres
+postgresql://postgres:<SUPABASE_DATABASE_PASSWORD>@db.<PROJECT_REF>.supabase.co:5432/postgres?sslmode=require
 ```
 
 The `postgres` role has `BYPASSRLS = true` by design. This means:

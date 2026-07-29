@@ -132,7 +132,30 @@ export interface CityComparisonEntry {
   stationsWithForecast: number;
   /** forecastAqi - currentAqi. Null whenever either side is missing — never fabricated. */
   delta: number | null;
+  /**
+   * ISO timestamp of the OLDEST reading among the stations that contributed
+   * to currentAqi (i.e. the least-fresh input to the average). Null when
+   * currentAqi is null. This exists so a station whose upstream sensor has
+   * gone quiet for hours doesn't average into a number that LOOKS as fresh
+   * as every other city's -- see isCurrentAqiStale below.
+   */
+  oldestReadingAt: string | null;
+  /**
+   * True when oldestReadingAt is older than STALE_READING_THRESHOLD_HOURS.
+   * The UI must show this explicitly (not just render the number) -- same
+   * "no data" honesty already applied to "Forecast pending", extended to
+   * cover "data present but stale" instead of treating every non-null
+   * currentAqi as equally current.
+   */
+  isCurrentAqiStale: boolean;
 }
+
+/**
+ * Matches the freshness window already used by the Civic AQI Alert Agent
+ * (see lib/agent/aqiAlertAgent.ts's DATA_FRESHNESS_HOURS) so "stale" means
+ * the same thing across the app instead of two different thresholds.
+ */
+const STALE_READING_THRESHOLD_HOURS = 12;
 
 // =============================================================================
 // Public API — three async functions, one per Supabase table
@@ -447,6 +470,7 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
       return {
         city: station.city,
         currentAqi: reading?.aqi ?? null,
+        currentReadingAt: reading?.timestamp ?? null,
         forecastAqi: forecastAvg,
       };
     })
@@ -458,6 +482,7 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
     currentCount: number;
     forecastSum: number;
     forecastCount: number;
+    oldestReadingAt: string | null;
   };
   const byCity = new Map<string, CityAgg>();
 
@@ -472,6 +497,7 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
         currentCount: 0,
         forecastSum: 0,
         forecastCount: 0,
+        oldestReadingAt: null,
       });
     }
     byCity.get(station.city)!.totalStations += 1;
@@ -482,13 +508,23 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
       console.error("[getCityComparison] Failed to load a station's data:", result.reason);
       continue;
     }
-    const { city, currentAqi, forecastAqi } = result.value;
+    const { city, currentAqi, currentReadingAt, forecastAqi } = result.value;
     const agg = byCity.get(city);
     if (!agg) continue;
 
     if (currentAqi != null) {
       agg.currentSum += currentAqi;
       agg.currentCount += 1;
+
+      // Track the OLDEST contributing reading, not the newest -- the point
+      // is to surface the weakest link in the average, since one 15h-stale
+      // station averaged in with three fresh ones would otherwise hide the
+      // staleness entirely.
+      if (currentReadingAt != null) {
+        if (agg.oldestReadingAt == null || new Date(currentReadingAt) < new Date(agg.oldestReadingAt)) {
+          agg.oldestReadingAt = currentReadingAt;
+        }
+      }
     }
     if (forecastAqi != null) {
       agg.forecastSum += forecastAqi;
@@ -500,6 +536,9 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
     const currentAqi = agg.currentCount > 0 ? agg.currentSum / agg.currentCount : null;
     const forecastAqi = agg.forecastCount > 0 ? agg.forecastSum / agg.forecastCount : null;
     const delta = currentAqi != null && forecastAqi != null ? forecastAqi - currentAqi : null;
+    const isCurrentAqiStale =
+      agg.oldestReadingAt != null &&
+      (Date.now() - new Date(agg.oldestReadingAt).getTime()) / 3_600_000 > STALE_READING_THRESHOLD_HOURS;
 
     return {
       city,
@@ -509,6 +548,8 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
       forecastAqi,
       stationsWithForecast: agg.forecastCount,
       delta,
+      oldestReadingAt: agg.oldestReadingAt,
+      isCurrentAqiStale,
     };
   });
 
