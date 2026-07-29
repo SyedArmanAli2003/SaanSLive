@@ -293,18 +293,34 @@ def build_latest_features(
     # Step 1: build full feature matrix (needed for correct lag computation)
     df = build_features(readings, weather)
 
-    # Step 2: take the last (most recent) row per station
-    # sort_values ensures we take the chronologically last, not just the last
-    # row in the DataFrame (which depends on data ingestion order)
+    # Step 2: take the chronologically last row per station.
+    #
+    # DO NOT use groupby(...).last() here. pandas' GroupBy.last() skips NaN
+    # *per column*, so it does not return a row — it returns the most recent
+    # non-null value of each column, assembled independently. When a
+    # station's latest rows have a lag gap (common: aqi_lag_24h is NaN
+    # whenever there was no reading ~24h before T), last() silently
+    # back-fills that NaN from an OLDER row. The result is a feature vector
+    # that never existed at any single moment: aqi measured at T mixed with
+    # aqi_lag_24h measured hours earlier.
+    #
+    # It also defeats predict.py's guard, which deliberately skips any
+    # station with a NaN feature (because train.py dropped NaN rows, so the
+    # model never learned on incomplete input). last() hides the exact NaN
+    # that guard exists to catch, so the model gets fed stale, mismatched
+    # features and writes a forecast that looks legitimate.
+    #
+    # tail(1) returns the actual last row per station, NaNs preserved.
     latest = (
-        df.sort_values("timestamp")
+        df.sort_values(["station_id", "timestamp"])
           .groupby("station_id", sort=False)
-          .last()
-          .reset_index()
+          .tail(1)
+          .reset_index(drop=True)
     )
 
-    # Restore city (groupby.last() drops non-aggregated string columns in
-    # older pandas; re-join from the original df to be safe)
+    # Defensive: tail(1) keeps every column (unlike groupby().last(), which
+    # moves station_id into the index), but keep the city re-join as a
+    # safety net for unexpected upstream column changes.
     if "city" not in latest.columns:
         city_map = df[["station_id", "city"]].drop_duplicates("station_id")
         latest = latest.merge(city_map, on="station_id", how="left")
