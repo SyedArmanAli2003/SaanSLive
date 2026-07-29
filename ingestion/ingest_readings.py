@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import os
 import sys
 import time
@@ -68,32 +69,75 @@ DEFAULT_HOURS       = 24
 
 # ── AQI calculation (US EPA PM2.5 breakpoints) ───────────────────────────────
 # Table: (C_low, C_high, I_low, I_high)
+#
+# BOUNDARY NOTE — why these C_low values differ from the published EPA table:
+#
+# The EPA publishes this table against PM2.5 concentrations TRUNCATED to one
+# decimal place, which is why its printed C_low values are 12.1 / 35.5 / 55.5 /
+# 150.5 / 250.5 / 350.5. OpenAQ returns raw float concentrations at full
+# precision, so transcribing the printed table literally leaves six 0.1-wide
+# dead zones between the rows:
+#
+#     12.0 < pm < 12.1   |   35.4 < pm < 35.5   |   55.4 < pm < 55.5
+#    150.4 < pm < 150.5  |  250.4 < pm < 250.5  |  350.4 < pm < 350.5
+#
+# A real reading of 12.05 µg/m³ matched no row, pm25_to_aqi() returned None, and
+# the row was then discarded by df.dropna(subset=["aqi"]) in
+# parse_measurements_to_df() — valid sensor data lost before it ever reached
+# Supabase, with nothing in the logs to say so.
+#
+# The bands are therefore stored as CONTIGUOUS ranges (each C_low equals the
+# previous C_high) and resolved with an upper-bound-only comparison, so every
+# non-negative concentration in 0…500.4 maps to exactly one band. The AQI values
+# produced at the published boundaries are unchanged.
 _PM25_BREAKPOINTS = [
     (0.0,   12.0,    0,   50),
-    (12.1,  35.4,   51,  100),
-    (35.5,  55.4,  101,  150),
-    (55.5, 150.4,  151,  200),
-    (150.5, 250.4, 201,  300),
-    (250.5, 350.4, 301,  400),
-    (350.5, 500.4, 401,  500),
+    (12.0,  35.4,   51,  100),
+    (35.4,  55.4,  101,  150),
+    (55.4, 150.4,  151,  200),
+    (150.4, 250.4, 201,  300),
+    (250.4, 350.4, 301,  400),
+    (350.4, 500.4, 401,  500),
 ]
+
+_PM25_SCALE_TOP = 500.4   # top of the defined EPA PM2.5 scale (µg/m³)
+_AQI_SCALE_MAX  = 500.0   # top of the AQI scale
 
 
 def pm25_to_aqi(pm25: float) -> Optional[float]:
     """
     Convert a PM2.5 concentration (µg/m³) to a US EPA AQI value.
-    Returns None if the value is outside the defined breakpoints.
+
     Formula: AQI = ((I_high - I_low) / (C_high - C_low)) * (C - C_low) + I_low
+
+    Returns None ONLY for genuinely unusable input (None, non-numeric, NaN, or
+    negative). Every non-negative concentration up to 500.4 µg/m³ resolves to a
+    band; anything above the top of the scale is capped at 500.
     """
+    if pm25 is None:
+        return None
+
+    try:
+        pm25 = float(pm25)
+    except (TypeError, ValueError):
+        return None
+
+    if math.isnan(pm25) or math.isinf(pm25):
+        return None
+
     if pm25 < 0:
         return None
+
+    # Checked before the loop so it is reached deterministically rather than
+    # depending on the loop failing to match first.
+    if pm25 > _PM25_SCALE_TOP:
+        return _AQI_SCALE_MAX
+
     for c_low, c_high, i_low, i_high in _PM25_BREAKPOINTS:
-        if c_low <= pm25 <= c_high:
+        if pm25 <= c_high:
             aqi = (i_high - i_low) / (c_high - c_low) * (pm25 - c_low) + i_low
             return round(aqi, 2)
-    # Above 500.4 µg/m³ — beyond AQI scale; cap at 500
-    if pm25 > 500.4:
-        return 500.0
+
     return None
 
 
@@ -215,8 +259,19 @@ def parse_measurements_to_df(
 
     # ── derive AQI ───────────────────────────────────────────────────────────
     df["aqi"] = df["pm25"].apply(pm25_to_aqi)
-    # Drop rows where PM2.5 could not be converted to AQI (shouldn't happen often)
+
+    # Every non-negative concentration up to 500.4 µg/m³ now maps to a band and
+    # anything above it is capped, so a None here means genuinely unusable
+    # input. Log it loudly instead of losing the row silently — this is exactly
+    # how the old 0.1-wide breakpoint gaps went unnoticed.
+    before_aqi_drop = len(df)
     df = df.dropna(subset=["aqi"])
+    aqi_dropped = before_aqi_drop - len(df)
+    if aqi_dropped:
+        log.warning(
+            "[%s] Dropped %d row(s): PM2.5 value could not be converted to AQI.",
+            station_id, aqi_dropped,
+        )
 
     # ── add metadata ─────────────────────────────────────────────────────────
     df["station_id"]  = station_id
@@ -261,9 +316,9 @@ def batch_insert_readings(
     df: pd.DataFrame,
 ) -> tuple[int, int]:
     """
-    Insert all rows from the DataFrame into `readings` in a single batch using
-    executemany-style execution (SQLAlchemy passes the list as separate params,
-    not as a single multi-value SQL string).
+    Insert all rows from the DataFrame into `readings`, one parameterized
+    statement per row, because ON CONFLICT ... RETURNING id is what lets us
+    report inserted vs. duplicate counts exactly rather than guessing.
 
     Returns (inserted_count, skipped_count).
     - inserted_count: rows where RETURNING id came back (new row written)
