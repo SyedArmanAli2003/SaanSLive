@@ -51,7 +51,7 @@ type AdvisoryRequestBody = {
 
 const NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
-const REQUEST_TIMEOUT_MS = 45_000;
+const REQUEST_TIMEOUT_MS = 8_000; // Fast-fail: let the cascade try next model quickly; UI falls back to deterministic template.
 
 // Cascade order: primary → fallback-1 → fallback-2
 const CASCADE_MODELS: NimModelId[] = [
