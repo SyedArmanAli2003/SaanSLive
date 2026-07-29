@@ -15,7 +15,7 @@ SaanSLive combines live OpenAQ station readings, weather enrichment, and per-cit
 - a live station map and 6-hour AQI forecast;
 - a personalized air action plan for a commute, outdoor workout, school run, or delivery shift;
 - a transparent data panel showing reading/model freshness and forecast RMSE against a persistence baseline;
-- a proactive Civic AQI Alert Agent that visibly plans, decides, alerts, and self-reviews against the next real observation;
+- a proactive Civic AQI Alert Agent that visibly plans, decides, alerts, and self-reviews against the next real observation — advisory text uses a deterministic 3-level template (no LLM call in the agent path), a deliberate reliability choice so a scheduled job never depends on external model availability or latency;
 - an auditable hotspot ranking and city comparison, both calculated from real readings;
 - a tool-calling assistant that queries the same live data layer rather than inventing AQI values.
 

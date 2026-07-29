@@ -57,27 +57,7 @@ reply) that plans, decides, acts, and reviews its own past output. Specifically:
    advisories jsonb ({station_id: advisory_text}), self_review jsonb (nullable —
    filled by the NEXT run, evaluating THIS run's flagged stations against what
    actually happened). Enable RLS: public read via anon key (same pattern as
-   stations/readings/forecasts), writes restricted to service_role.
-
-2. New module lib/agent/aqiAlertAgent.ts implementing a plan-act-observe loop as an
-   explicit sequence of logged steps, not a single opaque function call:
-   - PLAN: pull the current hotspot ranking (reuse getHotspotRanking from
-     lib/data.ts) and latest 6h forecasts for the top N stations.
-   - DECIDE: flag a station when current AQI category is "Unhealthy for Sensitive
-     Groups" or worse, OR the forecast shows a worsening trend past a threshold.
-     Call the NVIDIA NIM cascade (reuse the pattern from generateAdvisory.ts) to
-     produce a one-sentence plain-language reason per flagged station, grounded
-     only in the real numbers just pulled — same "never invent a number" rule as
-     the chatbot.
-   - ACT: generate a short health advisory per flagged station (reuse/extend
-     generateAdvisory.ts rather than duplicating its LLM-call logic).
-   - SELF-REVIEW: look up the agent's own most recent prior run. For each station
-     it flagged then, check the current real reading — did AQI in fact stay
-     elevated/worsen (confirmed) or drop back down (false alarm)? Compute a simple
-     accuracy summary and store it in that PRIOR row's self_review column (not
-     this run's).
-   - LOG: write the full run, including every step above, to agent_runs.
-   Every step's `data` field should hold the real numbers it used — this is what
+    Every step's `data` field should hold the real numbers it used — this is what
    gets rendered as the reasoning trace in the UI, so don't summarize it away.
 
 3. New route app/api/agent/run/route.ts (POST) that runs the agent and returns the
@@ -160,6 +140,17 @@ In the SaanSLive repo, add target-language support to the advisory pipeline:
    lib/agent/aqiAlertAgent.ts (Phase 1) and to the chatbot's SYSTEM_PROMPT in
    app/api/chat/route.ts, so a language choice is respected everywhere, not just
    one panel.
+
+   > **[AS-BUILT NOTE — Phase 1 deviation, also disclosed in openai-codex.md line 119]**
+   > The original plan asked the DECIDE/ACT steps to call the NVIDIA NIM cascade
+   > (reusing `generateAdvisory.ts`) to produce the per-station reason and advisory
+   > text. What was actually built uses a fixed 3-branch deterministic template
+   > (`advisoryFor()` in `lib/agent/advisoryText.ts`) keyed only on alert level —
+   > no LLM call anywhere in the agent's own decision path. This was a deliberate
+   > reliability choice: a scheduled GitHub Actions job must never depend on an
+   > external LLM's availability or latency, and a hard threshold rule is easier to
+   > audit than an LLM-generated one. The trade-off is less varied advisory text;
+   > the AdvisoryPanel's NIM cascade (user-facing, interactive) is unchanged.
 
 3. lib/localPreferences.ts already stores per-device onboarding preferences —
    add a language field there, and a small selector in OnboardingModal.tsx (or a
