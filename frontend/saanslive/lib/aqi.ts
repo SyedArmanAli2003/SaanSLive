@@ -21,9 +21,42 @@ export const AQI_SEVERITY_BANDS: SeverityBand[] = [
     { min: 301, max: Infinity, label: "Hazardous", color: "#6b1b24", areaColor: "rgba(107,27,36,0.18)" }, // maroon
 ];
 
+/**
+ * Resolve an AQI value to its US EPA severity band.
+ *
+ * IMPORTANT — why the rounding is here and not at the call sites:
+ *
+ * The band table above uses INTEGER boundaries (...50 | 51...100 | 101...150 | ...)
+ * because the EPA reports AQI as a whole number. The AQI values flowing through
+ * this app are NOT whole numbers:
+ *
+ *   - `readings.aqi`            is stored as round(aqi, 2) by ingestion/ingest_readings.py
+ *   - `forecasts.predicted_aqi` is raw XGBoost/LightGBM regression output
+ *   - city averages in lib/data.ts divide a sum by a station count
+ *
+ * So values like 50.2, 100.3, 150.5 or 200.4 land in the 1-unit gap BETWEEN two
+ * bands. Before this fix they matched no band at all and hit the
+ * `?? AQI_SEVERITY_BANDS[last]` fallback, which is the Hazardous band — so a
+ * perfectly Good AQI of 50.2 rendered as maroon "Hazardous" in every consumer
+ * of this function (StationMap markers, ForecastChart, AdvisoryPanel,
+ * HotspotPanel, CityComparisonView).
+ *
+ * Rounding to the nearest integer first — exactly how the EPA reports AQI —
+ * closes every gap and keeps the published band table intact.
+ */
 export function getAqiBand(aqi: number): SeverityBand {
+    // NaN / Infinity (e.g. Number(undefined) from a bad cast) has no meaningful
+    // band. Fail toward the most cautious band rather than quietly telling
+    // someone the air is "Good" based on a value we could not interpret.
+    if (!Number.isFinite(aqi)) {
+        return AQI_SEVERITY_BANDS[AQI_SEVERITY_BANDS.length - 1];
+    }
+
+    // AQI has no negative range; clamp rather than fall through to the fallback.
+    const value = Math.round(Math.max(0, aqi));
+
     return (
-        AQI_SEVERITY_BANDS.find((b) => aqi >= b.min && aqi <= b.max) ??
+        AQI_SEVERITY_BANDS.find((b) => value >= b.min && value <= b.max) ??
         AQI_SEVERITY_BANDS[AQI_SEVERITY_BANDS.length - 1]
     );
 }
