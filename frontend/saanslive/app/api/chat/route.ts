@@ -32,9 +32,49 @@ import { CHAT_TOOLS, runChatTool } from "../../../lib/chatTools";
 
 export const runtime = "nodejs";
 
+// Serverless functions are killed by the platform at their configured limit.
+// The previous version had no maxDuration and a 45s per-call timeout, so a
+// slow upstream model got the whole function terminated mid-flight and the
+// route surfaced a raw "AbortError" as a 502. Everything below is now sized
+// to finish INSIDE this budget and degrade with a readable message instead.
+export const maxDuration = 60;
+
 const NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const REQUEST_TIMEOUT_MS = 45_000;
-const MAX_TOOL_ROUNDS = 4;
+
+// Per-upstream-call ceiling.
+const REQUEST_TIMEOUT_MS = 18_000;
+
+// Whole-request ceiling, kept comfortably under maxDuration so we always get
+// to return a real JSON response rather than being hard-killed by the runtime.
+const OVERALL_BUDGET_MS = 50_000;
+
+// Don't start another upstream call with less than this much budget left --
+// it would only be aborted a moment later.
+const MIN_BUDGET_FOR_CALL_MS = 4_000;
+
+const MAX_TOOL_ROUNDS = 3;
+
+/**
+ * Ordered model candidates for a request that did NOT explicitly pick a model.
+ *
+ * NVIDIA_NIM_MODEL is honoured as a *candidate*, not as an absolute override:
+ * pointing it at a model that has become slow or overloaded previously took
+ * this entire route down in production, which is too fragile for a
+ * configuration value. The measured-fastest default leads, the configured
+ * model follows, and each is tried only while budget remains.
+ */
+function resolveModelCandidates(clientModel: unknown): NimModelId[] {
+    // An explicit per-request pick (the UI model picker) is honoured exactly,
+    // with no silent substitution -- same contract as the advisory route.
+    if (isNimModelId(clientModel)) return [clientModel];
+
+    const configured = process.env.NVIDIA_NIM_MODEL;
+    const ordered: NimModelId[] = [DEFAULT_NIM_MODEL];
+    if (isNimModelId(configured) && configured !== DEFAULT_NIM_MODEL) {
+        ordered.push(configured);
+    }
+    return ordered;
+}
 
 type ChatMessage = {
     role: "user" | "assistant" | "system" | "tool";
@@ -83,10 +123,11 @@ function buildSystemPrompt(preferredLanguage: string | undefined): string {
 async function callNimWithTools(
     apiKey: string,
     model: NimModelId,
-    messages: ChatMessage[]
+    messages: ChatMessage[],
+    timeoutMs: number
 ): Promise<{ message?: ChatMessage; error?: string }> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
         const settings = NIM_GENERATION_SETTINGS[model];
@@ -131,6 +172,42 @@ async function callNimWithTools(
     }
 }
 
+/**
+ * Try each candidate model in order until one returns a message, respecting
+ * the overall deadline. Returns the message plus which model produced it, so
+ * the caller can keep using the model that actually worked.
+ */
+async function callWithFallback(
+    apiKey: string,
+    candidates: NimModelId[],
+    conversation: ChatMessage[],
+    deadline: number
+): Promise<{ message?: ChatMessage; model?: NimModelId; error?: string }> {
+    let lastError: string | undefined;
+
+    for (const candidate of candidates) {
+        const remaining = deadline - Date.now();
+        if (remaining < MIN_BUDGET_FOR_CALL_MS) {
+            lastError ??= "Ran out of time budget before a model responded.";
+            break;
+        }
+
+        const { message, error } = await callNimWithTools(
+            apiKey,
+            candidate,
+            conversation,
+            Math.min(REQUEST_TIMEOUT_MS, remaining)
+        );
+
+        if (message) return { message, model: candidate };
+
+        lastError = error;
+        console.warn("[chat-api] Model failed, trying next candidate", { model: candidate, error });
+    }
+
+    return { error: lastError ?? "No model produced a response." };
+}
+
 export async function POST(request: Request) {
     let body: {
         messages?: { role: string; content: string }[];
@@ -155,12 +232,8 @@ export async function POST(request: Request) {
         );
     }
 
-    const configuredModel = process.env.NVIDIA_NIM_MODEL;
-    const model = isNimModelId(body.model)
-        ? body.model
-        : isNimModelId(configuredModel)
-            ? configuredModel
-            : DEFAULT_NIM_MODEL;
+    const candidates = resolveModelCandidates(body.model);
+    const deadline = Date.now() + OVERALL_BUDGET_MS;
 
     const conversation: ChatMessage[] = [
         { role: "system", content: buildSystemPrompt(body.preferredLanguage) },
@@ -170,17 +243,37 @@ export async function POST(request: Request) {
     ];
 
     const toolCallsMade: { name: string; args: unknown }[] = [];
+    let activeCandidates = candidates;
+    let usedModel: NimModelId = candidates[0];
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const { message, error } = await callNimWithTools(apiKey, model, conversation);
+        const { message, model: respondingModel, error } = await callWithFallback(
+            apiKey,
+            activeCandidates,
+            conversation,
+            deadline
+        );
 
-        if (error) {
-            console.error("[chat-api] NVIDIA NIM call failed:", error);
-            return NextResponse.json({ error }, { status: 502 });
+        if (error || !message) {
+            console.error("[chat-api] All model candidates failed:", error);
+            // The client renders this string directly, so it must be readable
+            // by a person -- never a raw abort/stack string.
+            return NextResponse.json(
+                {
+                    error:
+                        "The AI assistant is taking too long to respond right now. Please try again in a moment.",
+                },
+                { status: 503 }
+            );
         }
 
-        if (!message) {
-            return NextResponse.json({ error: "No response from model." }, { status: 502 });
+        if (respondingModel) {
+            usedModel = respondingModel;
+            // Stick with whatever just worked for the remaining rounds.
+            activeCandidates = [
+                respondingModel,
+                ...activeCandidates.filter((m) => m !== respondingModel),
+            ];
         }
 
         conversation.push(message);
@@ -189,7 +282,7 @@ export async function POST(request: Request) {
             // Final answer -- no more tools requested.
             return NextResponse.json({
                 reply: message.content ?? "",
-                model,
+                model: usedModel,
                 toolCalls: toolCallsMade,
             });
         }
@@ -216,8 +309,18 @@ export async function POST(request: Request) {
         }
     }
 
+    // Ran out of rounds while the model kept asking for more tools. The tool
+    // results are real and already in `conversation`, so report honestly
+    // rather than inventing a summary of them.
+    console.warn("[chat-api] Hit MAX_TOOL_ROUNDS without a final answer", {
+        rounds: MAX_TOOL_ROUNDS,
+        toolCalls: toolCallsMade.map((t) => t.name),
+    });
     return NextResponse.json(
-        { error: "Too many tool-call rounds without a final answer." },
-        { status: 502 }
+        {
+            error:
+                "I looked up the live data but couldn't finish composing an answer. Please try asking again, or ask about one city at a time.",
+        },
+        { status: 503 }
     );
 }

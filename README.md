@@ -3,7 +3,7 @@
 [![GitHub Actions](https://github.com/SyedArmanAli2003/SaanSLive/actions/workflows/ingest.yml/badge.svg)](https://github.com/SyedArmanAli2003/SaanSLive/actions/workflows/ingest.yml)
 [![Built with OpenAI Codex](https://img.shields.io/badge/built%20with-OpenAI%20Codex-000000)](./openai-codex.md)
 
-**SaanSLive** is a real-time air quality monitoring and 6-hour AQI forecasting system for 20 major Indian cities (53 monitoring stations). It ingests live PM2.5 readings from [OpenAQ](https://openaq.org), enriches them with weather data from [Open-Meteo](https://open-meteo.com), trains per-city XGBoost/LightGBM models, and serves forecasts, city-level comparisons, and a transparent hotspot-prioritization ranking on a Next.js dashboard — plus an AI chatbot and AI-polished health advisories, all grounded in real Supabase queries.
+**SaanSLive** is a real-time air quality monitoring and 6-hour AQI forecasting system for 20 major Indian cities (71 monitoring stations). It ingests live PM2.5 readings from [OpenAQ](https://openaq.org), enriches them with weather data from [Open-Meteo](https://open-meteo.com), trains per-city XGBoost/LightGBM models, and serves forecasts, city-level comparisons, and a transparent hotspot-prioritization ranking on a Next.js dashboard — plus an AI chatbot and AI-polished health advisories, all grounded in real Supabase queries.
 
 **Hackathon track:** AI for Societal Good. The project includes a transparent, personalized **Air Action Plan** for commutes, outdoor workouts, school runs, and delivery shifts, plus live data/model freshness and baseline-validation context. See [HACKATHON.md](./HACKATHON.md) for the project description, three-minute demo flow, and submission checklist.
 
@@ -37,7 +37,7 @@ No fake or generated sample data is used anywhere in this project. Every number 
 
 Served at `/dashboard` (six tabs, one route — no fragmented pages):
 
-- **Overview** — interactive Leaflet map with 53 station markers colored by real-time AQI band, city selector, 24h forecast chart (model prediction vs. persistence baseline, dashed), and an AI-polished health advisory panel.
+- **Overview** — interactive Leaflet map with 71 station markers colored by real-time AQI band, city selector, 24h forecast chart (model prediction vs. persistence baseline, dashed), and an AI-polished health advisory panel.
 - **Personal Air Action Plan** — turns the selected station's real forecast into a transparent, activity-specific plan for a commute, workout, school run, or delivery shift. The user can copy the plan, see the best available forecast window, and inspect the exact threshold/sensitivity adjustment behind the recommendation.
 - **Forecast Transparency** — shows the age of the underlying sensor reading and model run, number of forecast points, and stored model RMSE versus the no-change persistence baseline. Older and missing data stay visible rather than being presented as fresh AI output.
 - **Civic AQI Alert Agent** — an auditable proactive run that plans from current readings and forecasts, applies published thresholds, writes station advisories, and self-reviews the prior run against the next observed AQI. Every decision is visible in an expandable activity log. Advisory text in the agent path uses a deterministic 3-level template rather than an LLM call — a deliberate reliability choice so a scheduled job never depends on external model availability or latency.
@@ -245,12 +245,12 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 
 ## Database Schema
 
-| Table | Rows (2026-07-21) | Description |
+| Table | Rows (2026-08-03) | Description |
 |-------|-------------------|--------------|
-| `stations` | 53 | Monitoring stations across 20 Indian cities |
-| `readings` | 47,310 | PM2.5 / AQI readings |
-| `weather` | 17,099 | Hourly temperature, wind, humidity |
-| `forecasts` | 145 | XGBoost 6h AQI predictions |
+| `stations` | 71 | Monitoring stations across 20 Indian cities |
+| `readings` | 101,458 | PM2.5 / AQI readings |
+| `weather` | 37,168 | Hourly temperature, wind, humidity |
+| `forecasts` | 250 | XGBoost 6h AQI predictions |
 | `user_profiles` | 0 | Per-Supabase-Auth-user onboarding preferences (reserved) |
 | `agent_runs` | — | Public, read-only audit trail for Civic AQI Alert Agent runs |
 
@@ -298,7 +298,7 @@ Best improvements: Surat (+36.5%), Guwahati (+31.7%), Bhopal (+30.9%), Mumbai (+
 | Charts | Recharts |
 | Database | Supabase (PostgreSQL, RLS, Postgres functions) |
 | Data Client | @supabase/supabase-js |
-| AI (chatbot + advisory) | NVIDIA NIM (MiniMax M3 default, GPT-OSS 120B / DeepSeek V4 Flash / Llama 3.3 70B cascade & picker) |
+| AI (chatbot + advisory) | NVIDIA NIM (GPT-OSS 20B default + MiniMax M3 fallback, both latency-benchmarked; GPT-OSS 120B / DeepSeek V4 Flash / Llama 3.3 70B also selectable via the picker) |
 | ML Models | XGBoost, LightGBM, scikit-learn |
 | Ingestion | Python, SQLAlchemy, pandas, psycopg2 |
 | CI/CD | GitHub Actions |
@@ -321,4 +321,4 @@ SaanSLive is a planning aid built on public sensor data, **not medical advice**.
 
 ---
 
-*Last updated: 2026-07-29*
+*Last updated: 2026-08-03*

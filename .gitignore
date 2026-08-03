@@ -8,6 +8,18 @@
 skills-lock.json
 **/__pycache__/
 *.pyc
+# Trained model artifacts.
+#
+# Most artifacts stay local (experiments, alternate model types, alternate
+# horizons), BUT the xgboost 6h models are a DEPLOYMENT DEPENDENCY: the
+# scheduled ingestion workflow runs model/predict.py, which loads
+# model/artifacts/{city}_xgb_6h.pkl. If those files aren't in the repo, CI
+# checks out nothing usable, predict.py logs "artifact not found" for every
+# city, and 0 forecasts get written -- the dashboard silently goes stale
+# while the workflow still reports success.
+#
+# So: ignore every .pkl EXCEPT the xgb 6h set that production actually needs.
 model/artifacts/*.pkl
+!model/artifacts/*_xgb_6h.pkl
 ingestion/__pycache__/db.cpython-314.pyc
 ingestion/__pycache__/db.cpython-314.pyc
