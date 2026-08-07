@@ -22,7 +22,7 @@ All ideation, MVP scoping, architecture design, and spec-writing were done in fr
 | Idea validation & MVP scoping | Free chat-based AI assistant | Free |
 | Architecture & data-flow design | Free diagramming (diagrams committed to repo) | Free |
 | Build spec / acceptance criteria | Markdown docs in-repo (`saanslive-hackathon-upgrade-plan.md`, `report.md`) | Free |
-| **Application code generation & debugging** | **OpenAI Codex** | Hackathon credits |
+| **Application code generation & debugging** | **OpenAI Codex** | required subscription |
 | Data sources | OpenAQ v3 + Open-Meteo (public open APIs, no synthetic data) | Free |
 | Database | Supabase Postgres free tier | Free |
 | Hosting | Vercel free tier | Free |
