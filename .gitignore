@@ -23,3 +23,8 @@ model/artifacts/*.pkl
 !model/artifacts/*_xgb_6h.pkl
 ingestion/__pycache__/db.cpython-314.pyc
 ingestion/__pycache__/db.cpython-314.pyc
+test_nim_round2.py
+test_nim_tools.py
+test_vercel.py
+test_nim.py
+.gitignore
